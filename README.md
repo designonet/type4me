@@ -3,17 +3,6 @@ MacOS语音输入工具，实时识别、大模型文本优化、全本地存储
 
 <img width="420" height="78" alt="image" src="https://github.com/user-attachments/assets/dbc676e0-6128-4bed-89a2-553d2d1a197c" />
 
-<video src="https://github.com/user-attachments/assets/eff0ed4b-f31a-41a0-8a1b-09e800cb2657" width="600" controls></video>
-
-> **首次打开提示"无法验证开发者"？** 这是 macOS 对非 App Store 应用的正常安全提示。
->
-> 打开方式：右键点击 Type4Me.app → 选择「打开」→ 在弹窗中再次点击「打开」。只需操作一次，之后可正常使用。
->
-> 或者在终端执行：
-> ```bash
-> xattr -d com.apple.quarantine /Applications/Type4Me.app
-> ```
-
 ## 为什么做 Type4Me
 市面上语音输入法，至少命中以下问题之一：贵（$12/月）、封闭（不可导出记录）、扩展性差（不能自定义Prompt）、慢。
 
