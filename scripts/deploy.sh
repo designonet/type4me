@@ -3,7 +3,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_PATH="/Applications/Type4Me.app"
-SIGNING_IDENTITY="Type4Me Dev"
+SIGNING_IDENTITY="${CODESIGN_IDENTITY:--}"
 
 echo "Building release..."
 swift build -c release --package-path "$PROJECT_DIR" 2>&1 | grep -E "Build complete|error:|warning:" || true
@@ -28,8 +28,8 @@ mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
 cp "$BINARY" "$APP_PATH/Contents/MacOS/Type4Me"
 cp "$PROJECT_DIR/Type4Me/Resources/AppIcon.icns" "$APP_PATH/Contents/Resources/AppIcon.icns" 2>/dev/null || true
 
-echo "Signing with '$SIGNING_IDENTITY'..."
-codesign -f -s "$SIGNING_IDENTITY" "$APP_PATH"
+echo "Signing with '${SIGNING_IDENTITY}'..."
+codesign -f -s "$SIGNING_IDENTITY" "$APP_PATH" 2>/dev/null && echo "Signed." || echo "Signing skipped (no identity available)."
 
 echo "Launching via GUI session (no shell env vars)..."
 launchctl asuser "$(id -u)" /usr/bin/open "$APP_PATH"
