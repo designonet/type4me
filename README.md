@@ -92,7 +92,7 @@ bash scripts/deploy.sh
 
 ### 配置凭证
 
-首次启动会弹出设置向导，填入火山引擎的 App Key、Access Key 和 Resource ID 即可。
+首次启动会弹出设置向导，填入火山引擎的 App Key、Access Key 和 Resource ID 即可。详见[配置指引](https://my.feishu.cn/wiki/QdEnwBMfUi0mN4k3ucMcNYhUnXr)。
 
 ## 架构概览
 
