@@ -169,7 +169,7 @@ bash scripts/deploy.sh
 
 ## 演示视频
 
-<video src="https://github.com/user-attachments/assets/eff0ed4b-f31a-41a0-8a1b-09e800cb2657" width="600" controls></video>
+<video src="https://github.com/user-attachments/assets/eff0ed4b-f31a-41a0-8a1b-09e800cb2657" width="600" title="演示视频" controls>演示视频</video>
 
 ## 许可证
 
