@@ -59,10 +59,51 @@ enum LLMProvider: String, CaseIterable, Codable, Sendable {
         self != .ollama
     }
 
-    /// Whether this provider's API accepts the `thinking` configuration field.
-    var supportsThinkingConfig: Bool {
-        self == .doubao
+    /// Thinking/reasoning disable strategy for this provider.
+    /// Each provider uses a different field name to turn off chain-of-thought.
+    /// Returns nil for providers where no explicit disable is needed or possible.
+    var thinkingDisableField: ThinkingDisableField? {
+        switch self {
+        case .doubao, .kimi, .deepseek:
+            // thinking: { type: "disabled" }
+            return .thinking
+        case .bailian:
+            // enable_thinking: false (Qwen models)
+            return .enableThinking
+        case .zhipu:
+            // reasoning_effort: "none" (GLM-4.5+)
+            return .reasoningEffort
+        case .ollama:
+            // think: false
+            return .think
+        default:
+            // OpenAI: defaults to none already for GPT-5.2+, risky for o3
+            // Gemini: OpenAI-compat layer doesn't reliably support it
+            // MiniMax: API doesn't support disabling reasoning (use needsReasoningSplit instead)
+            // OpenRouter: proxy, can't generically handle
+            return nil
+        }
     }
+
+    /// MiniMax M2+ models always reason and can't be turned off.
+    /// reasoning_split=true separates thinking into reasoning_details field,
+    /// keeping it out of delta.content so our SSE parser won't pick it up.
+    var needsReasoningSplit: Bool {
+        self == .minimaxCN || self == .minimaxIntl
+    }
+}
+
+// MARK: - Thinking Disable Strategy
+
+enum ThinkingDisableField {
+    /// `thinking: { type: "disabled" }` — Doubao, Kimi, DeepSeek
+    case thinking
+    /// `enable_thinking: false` — Bailian (Qwen)
+    case enableThinking
+    /// `reasoning_effort: "none"` — Zhipu (GLM)
+    case reasoningEffort
+    /// `think: false` — Ollama
+    case think
 }
 
 // MARK: - Provider Config Protocol

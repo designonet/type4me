@@ -37,11 +37,16 @@ actor DoubaoChatClient: LLMClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 30
 
+        let disableField = provider.thinkingDisableField
         let body = ChatRequest(
             model: config.model,
             messages: [ChatMessage(role: "user", content: finalPrompt)],
             stream: true,
-            thinking: provider.supportsThinkingConfig ? ThinkingConfig(type: "disabled") : nil
+            thinking: disableField == .thinking ? ThinkingConfig(type: "disabled") : nil,
+            enable_thinking: disableField == .enableThinking ? false : nil,
+            reasoning_effort: disableField == .reasoningEffort ? "none" : nil,
+            think: disableField == .think ? false : nil,
+            reasoning_split: provider.needsReasoningSplit ? true : nil
         )
         request.httpBody = try JSONEncoder().encode(body)
 
@@ -95,6 +100,10 @@ struct ChatRequest: Encodable, Sendable {
     let messages: [ChatMessage]
     let stream: Bool
     let thinking: ThinkingConfig?
+    let enable_thinking: Bool?
+    let reasoning_effort: String?
+    let think: Bool?
+    let reasoning_split: Bool?
 }
 
 struct ChatMessage: Codable, Sendable, Equatable {
