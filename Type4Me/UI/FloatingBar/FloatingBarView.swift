@@ -86,18 +86,25 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
     // MARK: - Capsule Container
 
+    @ViewBuilder
     private var capsuleBar: some View {
-        let cornerRadius: CGFloat = 14
-        return barContent
+        let isError = state.barPhase == .error
+        barContent
             .animation(TF.springSnappy, value: state.barPhase)
             .frame(
                 width: capsuleWidth,
-                height: state.barPhase == .error ? nil : TF.barHeight
+                height: isError ? nil : TF.barHeight
             )
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .clipShape(isError
+                ? AnyShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                : AnyShape(Capsule())
+            )
             .background {
                 capsuleBackground
-                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                    .clipShape(isError
+                        ? AnyShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        : AnyShape(Capsule())
+                    )
             }
             .shadow(color: Color(white: 0.08, opacity: 0.5), radius: 5, x: 0, y: 0)
             .animation(TF.springSnappy, value: state.barPhase)
