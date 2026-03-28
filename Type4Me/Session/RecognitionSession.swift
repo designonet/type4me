@@ -458,6 +458,7 @@ actor RecognitionSession {
             let rawText = effectiveText
             var finalText = effectiveText
             var processedText: String? = nil
+            var llmFailed = false
 
             // Apply snippet replacements before LLM (e.g. "我的邮箱" → actual email)
             finalText = SnippetStorage.apply(to: finalText)
@@ -476,9 +477,10 @@ actor RecognitionSession {
                     onASREvent?(.processingResult(text: result))
                 } else {
                     let err = pendingLLMError ?? LLMError.emptyResponse(nil)
-                    DebugFileLogger.log("stop: early LLM nil/empty/error, showing to user: \(err)")
-                    finishWithLLMError(err)
-                    return
+                    DebugFileLogger.log("stop: early LLM failed, falling back to raw text: \(err)")
+                    pendingLLMError = nil
+                    llmFailed = true
+                    onASREvent?(.processingResult(text: rawText))
                 }
             } else if needsLLM {
                 state = .postProcessing
@@ -490,11 +492,9 @@ actor RecognitionSession {
                             text: finalText, prompt: promptContext.expandContextVariables(currentMode.prompt), config: llmConfig
                         )
                         if result.isEmpty {
-                            // Shouldn't reach here since DoubaoChatClient throws emptyResponse,
-                            // but guard defensively for other LLM client implementations.
-                            DebugFileLogger.log("stop: sync LLM empty result")
-                            finishWithLLMError(LLMError.emptyResponse(nil))
-                            return
+                            DebugFileLogger.log("stop: sync LLM empty result, falling back to raw text")
+                            llmFailed = true
+                            onASREvent?(.processingResult(text: rawText))
                         } else {
                             processedText = result
                             finalText = result
@@ -502,16 +502,14 @@ actor RecognitionSession {
                         }
                     } catch {
                         logger.error("LLM failed: \(error)")
-                        DebugFileLogger.log("stop: sync LLM FAILED error=\(error)")
-                        finishWithLLMError(error)
-                        return
+                        DebugFileLogger.log("stop: sync LLM FAILED, falling back to raw text: \(error)")
+                        llmFailed = true
+                        onASREvent?(.processingResult(text: rawText))
                     }
                 } else {
-                    DebugFileLogger.log("stop: no LLM credentials")
-                    finishWithLLMError(NSError(domain: "Type4Me", code: -10, userInfo: [
-                        NSLocalizedDescriptionKey: L("未配置 LLM 凭证", "LLM credentials not configured")
-                    ]))
-                    return
+                    DebugFileLogger.log("stop: no LLM credentials, falling back to raw text")
+                    llmFailed = true
+                    onASREvent?(.processingResult(text: rawText))
                 }
             }
 
@@ -532,9 +530,15 @@ actor RecognitionSession {
                 processingMode: currentMode == .direct ? nil : currentMode.name,
                 processedText: processedText,
                 finalText: finalText,
-                status: "completed",
+                status: llmFailed ? "llm_error" : "completed",
                 characterCount: finalText.count
             ))
+
+            if llmFailed {
+                onASREvent?(.error(NSError(domain: "Type4Me", code: -20, userInfo: [
+                    NSLocalizedDescriptionKey: L("LLM 处理失败，原文已存入剪贴板和识别历史", "LLM failed, raw text saved to clipboard & history")
+                ])))
+            }
 
         } else {
             // No text recognized: tell UI to exit processing state
@@ -711,19 +715,6 @@ actor RecognitionSession {
 
     private func setPendingLLMError(_ error: Error) {
         pendingLLMError = error
-    }
-
-    /// Emit an LLM error event and reset session state.
-    /// Call this from stopRecording() whenever LLM post-processing fails.
-    private func finishWithLLMError(_ error: Error) {
-        pendingLLMError = nil
-        onASREvent?(.error(error))
-        onASREvent?(.completed)
-        state = .idle
-        hasEmittedReadyForCurrentSession = false
-        currentTranscript = .empty
-        resetSpeculativeLLM()
-        SystemVolumeManager.restore()
     }
 
     private func resetSpeculativeLLM() {
