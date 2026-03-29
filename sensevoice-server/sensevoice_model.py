@@ -1041,6 +1041,7 @@ class StreamingSenseVoice:
         self.caches_shape = (chunk_size + 2 * padding, kwargs["input_size"])
         self.caches = torch.zeros(self.caches_shape)
         self.zeros = np.zeros((1, kwargs["input_size"]), dtype=float)
+        self.all_probs = []  # accumulate CTC probs for final re-decode
 
     @staticmethod
     def load_model(model: str, device: str) -> tuple:
@@ -1057,41 +1058,36 @@ class StreamingSenseVoice:
         self.decoder.reset()
         self.fbank = OnlineFbank(window_type="hamming")
         self.caches = torch.zeros(self.caches_shape)
+        self.all_probs = []  # accumulate CTC probs for final re-decode
 
     def full_inference(self, samples) -> str:
-        """Non-streaming inference on complete audio for highest accuracy.
+        """Re-decode accumulated CTC probs for higher accuracy final result.
 
-        Used as the second pass after streaming inference provides real-time partials.
-        Processes the entire audio at once, giving the model full context.
+        Instead of re-running the entire model on full audio (~0.5-3s),
+        this concatenates the CTC probs already computed during streaming
+        and runs a single global greedy decode (~0ms). The result is better
+        than per-chunk streaming decode because greedy over the full prob
+        sequence avoids chunk boundary artifacts (e.g. "codinging").
         """
-        import numpy as np
-        from funasr import AutoModel
+        if not self.all_probs:
+            return ""
 
-        audio = np.array(samples, dtype=np.float32) / 32768.0  # normalize to [-1, 1]
+        # Concatenate all chunk probs into one sequence
+        full_probs = torch.cat(self.all_probs, dim=0)
 
-        # Use the high-level FunASR generate() API for best accuracy.
-        # Always use CPU for full inference — MPS is slower for this model size
-        # due to data transfer overhead exceeding compute savings.
-        if not hasattr(self, '_funasr_model'):
-            self._funasr_model = AutoModel(
-                model='iic/SenseVoiceSmall',
-                device='cpu',
-                disable_update=True,
-            )
+        # Global greedy decode: argmax over full sequence, remove blanks + dedup
+        token_ids = full_probs.argmax(dim=-1).tolist()
+        prev = -1
+        filtered = []
+        for t in token_ids:
+            if t != 0 and t != prev:  # 0 = blank
+                filtered.append(t)
+            prev = t
 
-        result = self._funasr_model.generate(
-            input=audio,
-            cache={},
-            language="auto",
-            use_itn=True,
-        )
-        if result and len(result) > 0:
-            text = result[0].get('text', '')
-            # Strip SenseVoice tags like <|zh|><|NEUTRAL|><|Speech|><|withitn|>
-            import re
-            text = re.sub(r'<\|[^|]+\|>', '', text).strip()
-            return text
-        return ""
+        if not filtered:
+            return ""
+
+        return self.tokenizer.decode(filtered)
 
     def get_size(self):
         effective_size = self.cur_idx + 1 - self.padding
@@ -1137,6 +1133,8 @@ class StreamingSenseVoice:
                 probs = probs[self.chunk_size - cur_size :]
             if not is_last:
                 probs = probs[: self.chunk_size]
+            # Accumulate probs for final re-decode
+            self.all_probs.append(probs.detach().cpu())
             if self.beam_size > 1:
                 res = self.decoder.ctc_prefix_beam_search(
                     probs, beam_size=self.beam_size, is_last=is_last
