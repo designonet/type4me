@@ -81,6 +81,8 @@ actor VolcASRClient: SpeechRecognizer {
         lastTranscript = .empty
         audioPacketCount = 0
         totalAudioBytes = 0
+        sessionStartTime = ContinuousClock.now
+        lastTranscriptTime = nil
         NSLog("[ASR] Sending full_client_request (%d bytes), connectId=%@", message.count, connectId)
         do {
             try await task.send(.data(message))
@@ -141,6 +143,8 @@ actor VolcASRClient: SpeechRecognizer {
     private var audioPacketCount = 0
     private var totalAudioBytes = 0
     private var lastTranscript: RecognitionTranscript = .empty
+    private var lastTranscriptTime: ContinuousClock.Instant?
+    private var sessionStartTime: ContinuousClock.Instant?
 
     func sendAudio(_ data: Data) async throws {
         guard let task = webSocketTask else { return }
@@ -245,8 +249,18 @@ actor VolcASRClient: SpeechRecognizer {
                 guard transcript != lastTranscript else { return }
                 lastTranscript = transcript
 
+                let now = ContinuousClock.now
+                let sinceStart = sessionStartTime.map { now - $0 } ?? .zero
+                let sinceLastUpdate = lastTranscriptTime.map { now - $0 } ?? .zero
+                lastTranscriptTime = now
+
+                let gapMs = Int(sinceLastUpdate.components.seconds * 1000 + sinceLastUpdate.components.attoseconds / 1_000_000_000_000_000)
+                DebugFileLogger.log("ASR transcript +\(sinceStart) gap=\(gapMs)ms confirmed=\(transcript.confirmedSegments.count) partial=\(transcript.partialText.count) final=\(transcript.isFinal)")
+
                 NSLog(
-                    "[ASR] Transcript update confirmed=%d partial=%d final=%@",
+                    "[ASR] Transcript update +%@ gap=%dms confirmed=%d partial=%d final=%@",
+                    String(describing: sinceStart),
+                    gapMs,
                     transcript.confirmedSegments.count,
                     transcript.partialText.count,
                     transcript.isFinal ? "yes" : "no"
