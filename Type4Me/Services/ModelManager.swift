@@ -27,48 +27,43 @@ actor ModelManager {
     enum ModelArchitecture: String, Sendable {
         case paraformer
         case ctc
+        case senseVoice
     }
 
     // MARK: - Streaming Model Variants
 
     enum StreamingModel: String, CaseIterable, Sendable {
-        case zipformerSmallCtc    = "zipformer-small-ctc"
-        case zipformerCtcMulti    = "zipformer-ctc-multi"
-        case paraformerBilingual  = "paraformer-bilingual"
+        case senseVoiceSmall     = "sensevoice-small"
+        case paraformerBilingual = "paraformer-bilingual"
 
         var displayName: String {
             switch self {
-            case .zipformerSmallCtc:   return L("极速轻量", "Ultra Light")
-            case .zipformerCtcMulti:   return L("均衡推荐", "Balanced")
-            case .paraformerBilingual: return L("中英双语", "Bilingual")
+            case .senseVoiceSmall:    return L("SenseVoice 智能识别", "SenseVoice Smart")
+            case .paraformerBilingual: return L("Paraformer 中英双语", "Paraformer Bilingual")
             }
         }
 
         var description: String {
             switch self {
-            case .zipformerSmallCtc:
-                return L("最小模型，适合快速输入，精度一般",
-                         "Smallest model, fast input, moderate accuracy")
-            case .zipformerCtcMulti:
-                return L("14000小时训练，精度与大小的最佳平衡",
-                         "14k hours training, best accuracy/size balance")
+            case .senseVoiceSmall:
+                return L("阿里最新模型，中文准确率最高，支持中英粤日韩",
+                         "Alibaba's latest, best Chinese accuracy, zh/en/yue/ja/ko")
             case .paraformerBilingual:
-                return L("精度最高，支持中英文混合识别",
-                         "Highest accuracy, Chinese + English mixed recognition")
+                return L("流式识别，逐字显示，支持中英文混合",
+                         "Streaming recognition, word-by-word display, Chinese + English")
             }
         }
 
         var architecture: ModelArchitecture {
             switch self {
-            case .zipformerSmallCtc, .zipformerCtcMulti: return .ctc
+            case .senseVoiceSmall:    return .senseVoice
             case .paraformerBilingual: return .paraformer
             }
         }
 
         var directoryName: String {
             switch self {
-            case .zipformerSmallCtc:   return "sherpa-onnx-streaming-zipformer-small-ctc-zh-int8-2025-04-01"
-            case .zipformerCtcMulti:   return "sherpa-onnx-streaming-zipformer-ctc-multi-zh-hans-2023-12-13"
+            case .senseVoiceSmall:    return "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
             case .paraformerBilingual: return "sherpa-onnx-streaming-paraformer-bilingual-zh-en"
             }
         }
@@ -80,29 +75,23 @@ actor ModelManager {
 
         var requiredFiles: [String] {
             switch self {
-            case .zipformerSmallCtc:
-                return ["model.int8.onnx", "tokens.txt"]
-            case .zipformerCtcMulti:
-                return ["ctc-epoch-20-avg-1-chunk-16-left-128.onnx", "tokens.txt"]
-            case .paraformerBilingual:
-                return ["encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"]
+            case .senseVoiceSmall:    return ["model.int8.onnx", "tokens.txt"]
+            case .paraformerBilingual: return ["encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"]
             }
         }
 
         /// The primary model file used by the recognizer.
         var modelFileName: String {
             switch self {
-            case .zipformerSmallCtc:   return "model.int8.onnx"
-            case .zipformerCtcMulti:   return "ctc-epoch-20-avg-1-chunk-16-left-128.onnx"
-            case .paraformerBilingual: return "encoder.int8.onnx"  // uses encoder+decoder
+            case .senseVoiceSmall:    return "model.int8.onnx"
+            case .paraformerBilingual: return "encoder.int8.onnx"
             }
         }
 
         /// Approximate download size in MB for UI display.
         var approximateSizeMB: Int {
             switch self {
-            case .zipformerSmallCtc:   return 20
-            case .zipformerCtcMulti:   return 236
+            case .senseVoiceSmall:    return 228
             case .paraformerBilingual: return 1000
             }
         }
@@ -113,11 +102,13 @@ actor ModelManager {
     enum AuxModelType: String, CaseIterable, Sendable {
         case offlineParaformer = "offline-paraformer"
         case punctuation       = "punctuation"
+        case sileroVad         = "silero-vad"
 
         var displayName: String {
             switch self {
             case .offlineParaformer: return L("离线识别模型", "Offline ASR")
             case .punctuation:       return L("标点恢复模型", "Punctuation")
+            case .sileroVad:         return L("语音检测模型", "Voice Detection")
             }
         }
 
@@ -125,6 +116,7 @@ actor ModelManager {
             switch self {
             case .offlineParaformer: return "sherpa-onnx-paraformer-zh-2023-09-14"
             case .punctuation:       return "sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12"
+            case .sileroVad:         return "silero_vad"
             }
         }
 
@@ -135,6 +127,8 @@ actor ModelManager {
                 base = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
             case .punctuation:
                 base = "https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/"
+            case .sileroVad:
+                base = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
             }
             return URL(string: base + directoryName + ".tar.bz2")!
         }
@@ -143,6 +137,7 @@ actor ModelManager {
             switch self {
             case .offlineParaformer: return ["model.int8.onnx", "tokens.txt"]
             case .punctuation:       return ["model.onnx"]
+            case .sileroVad:         return ["silero_vad.onnx"]
             }
         }
 
@@ -150,6 +145,7 @@ actor ModelManager {
             switch self {
             case .offlineParaformer: return 700
             case .punctuation:       return 72
+            case .sileroVad:         return 2
             }
         }
     }
@@ -158,13 +154,24 @@ actor ModelManager {
 
     private static let selectedModelKey = "tf_selectedStreamingModel"
 
+    /// Raw values of removed Zipformer models — migrate to senseVoiceSmall.
+    private static let removedModelRawValues: Set<String> = [
+        "zipformer-small-ctc", "zipformer-ctc-multi"
+    ]
+
     nonisolated static var selectedStreamingModel: StreamingModel {
         get {
-            if let raw = UserDefaults.standard.string(forKey: selectedModelKey),
-               let model = StreamingModel(rawValue: raw) {
-                return model
+            if let raw = UserDefaults.standard.string(forKey: selectedModelKey) {
+                if let model = StreamingModel(rawValue: raw) {
+                    return model
+                }
+                // Migrate removed Zipformer models
+                if removedModelRawValues.contains(raw) {
+                    UserDefaults.standard.set(StreamingModel.senseVoiceSmall.rawValue, forKey: selectedModelKey)
+                    return .senseVoiceSmall
+                }
             }
-            return .zipformerCtcMulti  // default
+            return .senseVoiceSmall  // default
         }
         set {
             UserDefaults.standard.set(newValue.rawValue, forKey: selectedModelKey)

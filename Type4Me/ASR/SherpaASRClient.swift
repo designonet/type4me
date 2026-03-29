@@ -194,6 +194,8 @@ actor SherpaASRClient: SpeechRecognizer {
                 debug: 0,
                 modelType: "paraformer"
             )
+        case .senseVoice:
+            fatalError("SenseVoice uses offline recognition — should not reach SherpaASRClient streaming path")
         }
 
         let featConfig = sherpaOnnxFeatureConfig(sampleRate: 16000, featureDim: 80)
