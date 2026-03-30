@@ -227,11 +227,13 @@ async def chat_completions(request: dict):
 
     def _generate():
         import re
-        result = llm.create_chat_completion(
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+        # Share _inference_lock with ASR to prevent concurrent Metal GPU access
+        with _inference_lock:
+            result = llm.create_chat_completion(
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
         if result.get("choices"):
             text = result["choices"][0]["message"]["content"]
             text = re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL).strip()
