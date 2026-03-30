@@ -94,7 +94,6 @@ actor SenseVoiceServerManager {
                 "--language", "auto",
                 "--textnorm",
                 "--padding", "8",
-                "--chunk-size", "10",
             ]
         } else {
             proc.executableURL = URL(fileURLWithPath: executable)
@@ -109,7 +108,6 @@ actor SenseVoiceServerManager {
                 "--language", "auto",
                 "--textnorm",
                 "--padding", "8",
-                "--chunk-size", "10",
             ]
         }
 

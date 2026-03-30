@@ -483,6 +483,28 @@ struct ErrorDot: View {
     }
 }
 
+struct ProcessingDot: View {
+    @State private var pulse = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(Color.orange.opacity(pulse ? 0.15 : 0.3))
+                .frame(width: pulse ? 18 : 10, height: pulse ? 18 : 10)
+
+            Circle()
+                .fill(Color.orange)
+                .frame(width: 8, height: 8)
+        }
+        .frame(width: 24, height: 24)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+                pulse = true
+            }
+        }
+    }
+}
+
 // MARK: - Recording Timer
 
 /// Shows elapsed time since recording started, updates every second.

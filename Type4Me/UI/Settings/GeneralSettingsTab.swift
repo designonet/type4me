@@ -1012,7 +1012,7 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
                 let llmConfig = config.toLLMConfig()
                 let client: any LLMClient = provider == .claude
                     ? ClaudeChatClient()
-                    : DoubaoChatClient(provider: provider)
+                    : OpenAICompatibleChatClient(provider: provider)
                 let reply = try await client.process(text: "hi", prompt: "{text}", config: llmConfig)
                 guard !Task.isCancelled else { return }
                 llmTestStatus = .success

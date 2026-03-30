@@ -46,7 +46,7 @@ actor RecognitionSession {
         if provider == .claude {
             return ClaudeChatClient()
         }
-        return DoubaoChatClient(provider: provider)
+        return OpenAICompatibleChatClient(provider: provider)
     }
 
     /// Pre-initialize audio subsystem so the first recording starts instantly.
@@ -96,10 +96,15 @@ actor RecognitionSession {
     private var speculativeLLMTask: Task<String?, Never>?
     private var speculativeLLMText: String = ""
     private var speculativeDebounceTask: Task<Void, Never>?
+    /// LLM task fired at stopRecording() — stored as property so ESC can cancel it.
+    private var earlyLLMTask: Task<String?, Never>?
     /// Stores the last LLM error from the early/fresh LLM task, consumed once by stopRecording().
     private var pendingLLMError: Error?
     /// When true, skip text injection (paste) but still save to clipboard & history.
     private var injectionAborted = false
+
+    /// Publicly accessible LLM task status for HotkeyManager to check ESC eligibility.
+    @MainActor var isRunningLLMTask: Bool = false
 
     // MARK: - Toggle
 
@@ -353,10 +358,23 @@ actor RecognitionSession {
         await forceReset()
     }
 
-    /// Mark that injection should be skipped. Recognition, clipboard, and history still proceed.
+    /// Hard cancel: tear down everything regardless of current state.
+    /// Used for ESC abort — cancels LLM, stops audio, resets to idle.
+    func hardCancel() async {
+        DebugFileLogger.log("hardCancel from state=\(state)")
+        earlyLLMTask?.cancel()
+        resetSpeculativeLLM()
+        injectionAborted = true
+        NotificationCenter.default.post(name: .llmTaskDidEnd, object: nil)
+        await forceReset()
+    }
+
+    /// Mark that injection should be skipped. Cancel in-flight LLM tasks.
     func abortInjection() {
         injectionAborted = true
-        DebugFileLogger.log("abortInjection: injection will be skipped")
+        earlyLLMTask?.cancel()
+        resetSpeculativeLLM()
+        DebugFileLogger.log("abortInjection: injection will be skipped, LLM tasks cancelled")
     }
 
     func stopRecording() async {
@@ -365,6 +383,10 @@ actor RecognitionSession {
             logger.warning("stopRecording called but state is \(String(describing: self.state))")
             return
         }
+
+        // Immediately set isProcessing = true so ESC can cancel during post-processing
+        // This is synchronous - don't wait for notification
+        NotificationCenter.default.post(name: .llmTaskDidStart, object: nil)
 
         let stopT0 = ContinuousClock.now
         SystemVolumeManager.restore()  // Restore before stop sound plays
@@ -386,10 +408,10 @@ actor RecognitionSession {
         // otherwise fire fresh LLM immediately.
         // Batch (non-streaming) providers skip early LLM — no real text available yet.
         cancelSpeculativeLLM()
+        earlyLLMTask = nil  // Clear any previous task
         let needsLLM = !currentMode.prompt.isEmpty
         let provider = KeychainService.selectedASRProvider
         let canEarlyLLM = ASRProviderRegistry.capabilities(for: provider).isStreaming
-        var earlyLLMTask: Task<String?, Never>?
         if needsLLM && canEarlyLLM {
             var earlyText = currentTranscript.composedText
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -402,20 +424,36 @@ actor RecognitionSession {
                     state = .postProcessing
                     DebugFileLogger.log("stop: reusing speculative LLM +\(ContinuousClock.now - stopT0)")
                 } else if let llmConfig = KeychainService.loadLLMConfig() {
-                    // Text changed since last speculative call, fire fresh
+                    // Text changed since last speculative call, fire fresh with streaming
                     speculativeLLMTask?.cancel()
                     let prompt = promptContext.expandContextVariables(currentMode.prompt)
                     let client = currentLLMClient()
+                    let callback = onASREvent
                     state = .postProcessing
-                    DebugFileLogger.log("stop: fresh LLM firing mode=\(currentMode.name) model=\(llmConfig.model) with \(earlyText.count) chars +\(ContinuousClock.now - stopT0)")
-                    earlyLLMTask = Task {
+                    DebugFileLogger.log("stop: fresh LLM streaming mode=\(currentMode.name) model=\(llmConfig.model) with \(earlyText.count) chars +\(ContinuousClock.now - stopT0)")
+                    earlyLLMTask = Task { @MainActor in
+                        self.isRunningLLMTask = true
+                        NotificationCenter.default.post(name: .llmTaskDidStart, object: nil)
+                        defer {
+                            self.isRunningLLMTask = false
+                            NotificationCenter.default.post(name: .llmTaskDidEnd, object: nil)
+                        }
                         do {
-                            let result = try await client.process(
-                                text: earlyText, prompt: prompt, config: llmConfig
+                            let result = try await client.processStream(
+                                text: earlyText, prompt: prompt, config: llmConfig,
+                                onChunk: { partial in
+                                    Task { @MainActor in
+                                        callback?(.processingPartial(text: partial))
+                                    }
+                                }
                             )
                             DebugFileLogger.log("stop: fresh LLM done \(result.count) chars +\(ContinuousClock.now - stopT0)")
                             return result
                         } catch {
+                            if Task.isCancelled {
+                                DebugFileLogger.log("stop: fresh LLM cancelled +\(ContinuousClock.now - stopT0)")
+                                return nil
+                            }
                             DebugFileLogger.log("stop: fresh LLM FAILED +\(ContinuousClock.now - stopT0) error=\(error)")
                             await self.setPendingLLMError(error)
                             return nil
@@ -518,11 +556,19 @@ actor RecognitionSession {
             } else if needsLLM {
                 state = .postProcessing
                 if let llmConfig = KeychainService.loadLLMConfig() {
-                    DebugFileLogger.log("stop: sync LLM firing mode=\(currentMode.name) model=\(llmConfig.model) with \(finalText.count) chars")
+                    NotificationCenter.default.post(name: .llmTaskDidStart, object: nil)
+                    DebugFileLogger.log("stop: sync LLM streaming mode=\(currentMode.name) model=\(llmConfig.model) with \(finalText.count) chars")
                     do {
                         let client = currentLLMClient()
-                        let result = try await client.process(
-                            text: finalText, prompt: promptContext.expandContextVariables(currentMode.prompt), config: llmConfig
+                        let prompt = promptContext.expandContextVariables(currentMode.prompt)
+                        let callback = onASREvent
+                        let result = try await client.processStream(
+                            text: finalText, prompt: prompt, config: llmConfig,
+                            onChunk: { partial in
+                                Task { @MainActor in
+                                    callback?(.processingPartial(text: partial))
+                                }
+                            }
                         )
                         if result.isEmpty {
                             DebugFileLogger.log("stop: sync LLM empty result, falling back to raw text")
@@ -539,6 +585,7 @@ actor RecognitionSession {
                         llmFailed = true
                         onASREvent?(.processingResult(text: rawText))
                     }
+                    NotificationCenter.default.post(name: .llmTaskDidEnd, object: nil)
                 } else {
                     DebugFileLogger.log("stop: no LLM credentials, falling back to raw text")
                     llmFailed = true
@@ -599,6 +646,7 @@ actor RecognitionSession {
             currentTranscript = .empty
         }
         resetSpeculativeLLM()
+        earlyLLMTask = nil
         SystemVolumeManager.restore()
         logger.info("Session complete, injected \(effectiveText.count) chars")
     }
@@ -643,7 +691,7 @@ actor RecognitionSession {
                 Task { await self.stopRecording() }
             }
 
-        case .processingResult, .finalized:
+        case .processingPartial, .processingResult, .finalized:
             break
         }
     }
@@ -750,11 +798,23 @@ actor RecognitionSession {
         let prompt = promptContext.expandContextVariables(currentMode.prompt)
 
         let client = currentLLMClient()
+        let callback = onASREvent
         DebugFileLogger.log("speculative LLM: firing mode=\(currentMode.name) model=\(llmConfig.model) with \(text.count) chars")
-        speculativeLLMTask = Task {
+        speculativeLLMTask = Task { @MainActor in
+            self.isRunningLLMTask = true
+            NotificationCenter.default.post(name: .llmTaskDidStart, object: nil)
+            defer {
+                self.isRunningLLMTask = false
+                NotificationCenter.default.post(name: .llmTaskDidEnd, object: nil)
+            }
             do {
-                let result = try await client.process(
-                    text: text, prompt: prompt, config: llmConfig
+                let result = try await client.processStream(
+                    text: text, prompt: prompt, config: llmConfig,
+                    onChunk: { partial in
+                        Task { @MainActor in
+                            callback?(.processingPartial(text: partial))
+                        }
+                    }
                 )
                 DebugFileLogger.log("speculative LLM: done \(result.count) chars")
                 return result
@@ -795,6 +855,8 @@ actor RecognitionSession {
 
         eventConsumptionTask?.cancel()
         eventConsumptionTask = nil
+        earlyLLMTask?.cancel()
+        earlyLLMTask = nil
         resetSpeculativeLLM()
 
         audioEngine.stop()

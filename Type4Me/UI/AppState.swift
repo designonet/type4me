@@ -373,6 +373,24 @@ final class AppState {
         }
     }
 
+    private var lastPartialUpdate: Date = .distantPast
+    private let partialUpdateInterval: TimeInterval = 0.1  // 100ms throttle
+
+    func setProcessingPartial(_ text: String) {
+        let now = Date()
+        // Throttle: only update UI every 100ms to avoid overwhelming SwiftUI
+        guard now.timeIntervalSince(lastPartialUpdate) >= partialUpdateInterval || text.isEmpty else {
+            return
+        }
+        lastPartialUpdate = now
+
+        if text.isEmpty {
+            segments = []
+        } else {
+            segments = [TranscriptionSegment(text: text, isConfirmed: false)]
+        }
+    }
+
     func showProcessingResult(_ result: String) {
         if result.isEmpty {
             cancel()
@@ -455,4 +473,6 @@ extension Notification.Name {
     static let hotkeyRecordingDidEnd = Notification.Name("Type4MeHotkeyRecordingDidEnd")
     static let navigateToMode = Notification.Name("Type4MeNavigateToMode")
     static let selectMode = Notification.Name("Type4MeSelectMode")
+    static let llmTaskDidStart = Notification.Name("Type4MeLLMTaskDidStart")
+    static let llmTaskDidEnd = Notification.Name("Type4MeLLMTaskDidEnd")
 }

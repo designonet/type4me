@@ -1,7 +1,7 @@
 import XCTest
 @testable import Type4Me
 
-final class DoubaoChatClientTests: XCTestCase {
+final class OpenAICompatibleChatClientTests: XCTestCase {
 
     func testProcessInterpolatesPlainTextIntoTemplate() {
         let prompt = "请修正以下文本：{text}"

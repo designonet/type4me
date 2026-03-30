@@ -23,6 +23,17 @@ final class HotkeyManager: NSObject {
     /// Which toggle mode is currently active (recording). Only one can be active at a time.
     private var activeToggleModeId: UUID?
 
+    /// Called when ESC is pressed during any active phase (including post-processing).
+    /// Separate from onESCAbort which only fires when isRecording || isProcessing.
+    var onESCAnyPhase: (@Sendable () -> Void)?
+
+    /// Reset toggle/hold state so next hotkey press starts fresh.
+    func resetActiveModes() {
+        activeToggleModeId = nil
+        for key in toggleState.keys { toggleState[key] = false }
+        for key in holdState.keys { holdState[key] = false }
+    }
+
     /// Maximum hold duration before auto-stop (seconds).
     private let maxHoldDuration: TimeInterval = 120
 
@@ -190,15 +201,13 @@ final class HotkeyManager: NSObject {
             }
         }
 
-        // ESC key (keyCode 53) - abort active recording or processing
+        // ESC key (keyCode 53) - abort when recording or during LLM post-processing
         if isESCAbortEnabled && type == .keyDown && keyCode == 53 {
             let isRecording = activeToggleModeId != nil || holdState.values.contains(true)
             let shouldAbort = isRecording || isProcessing
             if shouldAbort {
-                NSLog("[HotkeyManager] ESC pressed, triggering abort (recording=%@, processing=%@)",
-                      isRecording ? "true" : "false", isProcessing ? "true" : "false")
                 onESCAbort?()
-                return nil  // Swallow ESC
+                return nil
             }
         }
 

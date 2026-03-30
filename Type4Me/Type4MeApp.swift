@@ -112,6 +112,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     case .processingResult(let text):
                         appState.showProcessingResult(text)
                         self.hotkeyManager.isProcessing = true
+                    case .processingPartial(let text):
+                        DebugFileLogger.log("UI received processingPartial: \(text.count) chars, barPhase=\(appState.barPhase), segments.count=\(appState.segments.count)")
+                        appState.setProcessingPartial(text)
+                        self.hotkeyManager.isProcessing = true
                     case .finalized(let text, let injection):
                         appState.finalize(text: text, outcome: injection)
                         self.hotkeyManager.isProcessing = false
@@ -275,18 +279,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // ESC abort: skip injection but let recognition/clipboard/history proceed.
+        // ESC abort: hard cancel — tear down everything, no text output.
         hotkeyManager.onESCAbort = { [weak self] in
             guard let self else { return }
             let phase = appState.barPhase
             guard phase == .recording || phase == .processing || phase == .preparing else {
-                return  // Not in an active session, ignore ESC
+                return
             }
-            NSLog("[Type4Me] >>> HOTKEY: ESC abort injection (phase=%@)", String(describing: phase))
-            DebugFileLogger.log("hotkey ESC abort injection phase=\(phase)")
+            self.hotkeyManager.resetActiveModes()
+            self.appState.showCancelled()
             Task {
-                await self.session.abortInjection()
-                await self.session.stopRecording()
+                await self.session.hardCancel()
             }
         }
 
@@ -301,6 +304,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.syncESCAbortSetting()
             }
         }
+
+        setupLLMTaskNotifications()
     }
 
     private func syncESCAbortSetting() {
@@ -309,6 +314,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hotkeyManager.isESCAbortEnabled = true
         } else {
             hotkeyManager.isESCAbortEnabled = UserDefaults.standard.bool(forKey: "tf_escAbortEnabled")
+        }
+    }
+
+    // MARK: - LLM task notifications
+
+    private func setupLLMTaskNotifications() {
+        NotificationCenter.default.addObserver(
+            forName: .llmTaskDidStart,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.hotkeyManager.isProcessing = true
+        }
+        NotificationCenter.default.addObserver(
+            forName: .llmTaskDidEnd,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.hotkeyManager.isProcessing = false
         }
     }
 

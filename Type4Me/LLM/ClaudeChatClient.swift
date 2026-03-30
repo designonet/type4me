@@ -55,6 +55,7 @@ actor ClaudeChatClient: LLMClient {
         // Parse SSE stream (Anthropic format)
         var result = ""
         for try await line in bytes.lines {
+            try Task.checkCancellation()
             guard line.hasPrefix("data: ") else { continue }
             let payload = String(line.dropFirst(6))
             guard let data = payload.data(using: .utf8),
@@ -74,6 +75,62 @@ actor ClaudeChatClient: LLMClient {
         }
 
         logger.info("Claude result: \(result.count) chars")
+
+        return result.strippingThinkTags()
+    }
+
+    /// Streaming variant: calls onChunk with accumulated text for each SSE chunk.
+    func processStream(text: String, prompt: String, config: LLMConfig, onChunk: @Sendable @escaping (String) -> Void) async throws -> String {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else { return text }
+        let finalPrompt = prompt.replacingOccurrences(of: "{text}", with: trimmedText)
+
+        guard let url = URL(string: "\(config.baseURL)/messages") else {
+            throw LLMError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(config.apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+
+        let body = ClaudeRequest(
+            model: config.model,
+            max_tokens: 4096,
+            system: nil,
+            messages: [ClaudeMessage(role: "user", content: finalPrompt)],
+            stream: true
+        )
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw LLMError.requestFailed((response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+
+        var result = ""
+        for try await line in bytes.lines {
+            try Task.checkCancellation()
+            guard line.hasPrefix("data: ") else { continue }
+            let payload = String(line.dropFirst(6))
+            guard let data = payload.data(using: .utf8),
+                  let event = try? JSONDecoder().decode(ClaudeStreamEvent.self, from: data)
+            else { continue }
+
+            switch event.type {
+            case "content_block_delta":
+                if let delta = event.delta, let text = delta.text {
+                    result += text
+                    onChunk(result.strippingThinkTags())
+                }
+            case "message_stop":
+                break
+            default:
+                continue
+            }
+        }
 
         return result.strippingThinkTags()
     }

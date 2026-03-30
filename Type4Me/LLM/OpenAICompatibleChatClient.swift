@@ -1,9 +1,9 @@
 import Foundation
 import os
 
-actor DoubaoChatClient: LLMClient {
+actor OpenAICompatibleChatClient: LLMClient {
 
-    private let logger = Logger(subsystem: "com.type4me.llm", category: "DoubaoChatClient")
+    private let logger = Logger(subsystem: "com.type4me.llm", category: "OpenAICompatibleChatClient")
     private let provider: LLMProvider
 
     init(provider: LLMProvider = .doubao) {
@@ -64,19 +64,26 @@ actor DoubaoChatClient: LLMClient {
 
         // Parse SSE stream
         var result = ""
+        var hasReasoning = false
         var lineCount = 0
         var firstDataLine: String?
         for try await line in bytes.lines {
+            try Task.checkCancellation()
             lineCount += 1
             guard line.hasPrefix("data: ") else { continue }
             let payload = String(line.dropFirst(6))
             if firstDataLine == nil { firstDataLine = String(payload.prefix(300)) }
             if payload == "[DONE]" { break }
             guard let data = payload.data(using: .utf8),
-                  let chunk = try? JSONDecoder().decode(ChatStreamChunk.self, from: data),
-                  let content = chunk.choices.first?.delta.content
+                  let chunk = try? JSONDecoder().decode(ChatStreamChunk.self, from: data)
             else { continue }
-            result += content
+            let delta = chunk.choices.first?.delta
+            if let text = delta?.content, !text.isEmpty {
+                result += text
+            } else if let text = delta?.reasoning_content, !text.isEmpty {
+                if !hasReasoning { result += ""; hasReasoning = true }
+                result += text
+            }
         }
 
         if result.isEmpty && lineCount > 0 {
@@ -90,6 +97,76 @@ actor DoubaoChatClient: LLMClient {
         logger.info("LLM result: \(result.count) chars")
 
         return result.strippingThinkTags()
+    }
+
+    /// Streaming variant: calls onChunk with accumulated text for each SSE chunk.
+    func processStream(text: String, prompt: String, config: LLMConfig, onChunk: @Sendable @escaping (String) -> Void) async throws -> String {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else { return text }
+        let finalPrompt = prompt.replacingOccurrences(of: "{text}", with: trimmedText)
+
+        guard let url = URL(string: "\(config.baseURL)/chat/completions") else {
+            throw LLMError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+
+        let disableField = provider.thinkingDisableField
+        let body = ChatRequest(
+            model: config.model,
+            messages: [ChatMessage(role: "user", content: finalPrompt)],
+            stream: true,
+            thinking: disableField == .thinking ? ThinkingConfig(type: "disabled") : nil,
+            enable_thinking: disableField == .enableThinking ? false : nil,
+            reasoning_effort: disableField == .reasoningEffort ? "none" : nil,
+            think: disableField == .think ? false : nil,
+            reasoning_split: provider.needsReasoningSplit ? true : nil
+        )
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw LLMError.requestFailed((response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+
+        var result = ""
+        var contentResult = ""
+        var hasReasoning = false
+        var chunkCount = 0
+        for try await line in bytes.lines {
+            try Task.checkCancellation()
+            guard line.hasPrefix("data: ") else { continue }
+            let payload = String(line.dropFirst(6))
+            if payload == "[DONE]" { break }
+            guard let data = payload.data(using: .utf8),
+                  let chunk = try? JSONDecoder().decode(ChatStreamChunk.self, from: data)
+            else { continue }
+            let delta = chunk.choices.first?.delta
+            var hasNewContent = false
+            if let text = delta?.content, !text.isEmpty {
+                if hasReasoning { result += ""; hasReasoning = false }
+                result += text
+                contentResult += text
+                hasNewContent = true
+            } else if let text = delta?.reasoning_content, !text.isEmpty {
+                if !hasReasoning { result += ""; hasReasoning = true }
+                result += text
+            }
+            // Only emit when there's actual content (not just thinking)
+            if hasNewContent {
+                chunkCount += 1
+                onChunk(contentResult)
+            }
+        }
+        DebugFileLogger.log("LLM stream done: \(chunkCount) chunks, \(result.count) chars total")
+
+        let finalResult = contentResult.isEmpty ? result.strippingThinkTags() : contentResult
+        if finalResult.isEmpty { throw LLMError.emptyResponse(nil) }
+        return finalResult
     }
 }
 
@@ -125,6 +202,7 @@ struct ChunkChoice: Decodable, Sendable {
 
 struct ChunkDelta: Decodable, Sendable {
     let content: String?
+    let reasoning_content: String?
 }
 
 enum LLMError: Error, LocalizedError {

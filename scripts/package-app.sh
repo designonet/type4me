@@ -118,6 +118,30 @@ fi
 cp "$PROJECT_DIR/Type4Me/Resources/THIRD_PARTY_LICENSES.txt" "$APP_PATH/Contents/Resources/" 2>/dev/null || true
 
 echo "Signing with '${SIGNING_IDENTITY}'..."
-codesign -f -s "$SIGNING_IDENTITY" "$APP_PATH" 2>/dev/null && echo "Signed." || echo "Signing skipped (no identity available)."
+SV_DIST_TMP=""
+SV_WRAPPER_TMP=""
+if [ -d "$APP_PATH/Contents/MacOS/sensevoice-server-dist" ]; then
+    SV_DIST_TMP=$(mktemp -d)
+    mv "$APP_PATH/Contents/MacOS/sensevoice-server-dist" "$SV_DIST_TMP/"
+    if [ -f "$APP_PATH/Contents/MacOS/sensevoice-server" ]; then
+        SV_WRAPPER_TMP=$(mktemp -d)
+        mv "$APP_PATH/Contents/MacOS/sensevoice-server" "$SV_WRAPPER_TMP/"
+    fi
+fi
+
+codesign -f -s "$SIGNING_IDENTITY" "$APP_PATH" 2>/dev/null && echo "Bundle signed." || echo "Signing skipped (no identity available)."
+
+if [ -n "$SV_DIST_TMP" ]; then
+    mv "$SV_DIST_TMP/sensevoice-server-dist" "$APP_PATH/Contents/MacOS/"
+    rm -rf "$SV_DIST_TMP"
+    if [ -n "$SV_WRAPPER_TMP" ]; then
+        mv "$SV_WRAPPER_TMP/sensevoice-server" "$APP_PATH/Contents/MacOS/"
+        rm -rf "$SV_WRAPPER_TMP"
+    fi
+    find "$APP_PATH/Contents/MacOS/sensevoice-server-dist" -type f \( -name "*.dylib" -o -name "*.so" \) \
+        -exec codesign -f -s "$SIGNING_IDENTITY" {} \; 2>/dev/null || true
+    codesign -f -s "$SIGNING_IDENTITY" "$APP_PATH/Contents/MacOS/sensevoice-server-dist/sensevoice-server" 2>/dev/null || true
+    echo "sensevoice-server binaries signed."
+fi
 
 echo "App bundle ready at $APP_PATH"

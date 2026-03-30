@@ -49,6 +49,7 @@ enum RecognitionEvent: Sendable {
     case transcript(RecognitionTranscript)
     case error(Error)
     case completed
+    case processingPartial(text: String)
     case processingResult(text: String)
     case finalized(text: String, injection: InjectionOutcome)
 }
