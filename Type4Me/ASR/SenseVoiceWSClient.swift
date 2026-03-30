@@ -218,6 +218,10 @@ actor SenseVoiceWSClient: SpeechRecognizer {
             let deltaAudio = await self.allAudioData.suffix(from: self.qwen3ConfirmedOffset)
             guard deltaAudio.count > 3200 else { return }  // at least 100ms of audio
 
+            // Snapshot the offset before the HTTP round-trip so audio arriving
+            // during the request doesn't get silently marked as processed.
+            let offsetSnapshot = await self.allAudioData.count
+
             let url = URL(string: "http://127.0.0.1:\(port)/transcribe")!
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
@@ -232,7 +236,7 @@ actor SenseVoiceWSClient: SpeechRecognizer {
                 guard !Task.isCancelled else { return }
                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let text = json["text"] as? String, !text.isEmpty {
-                    await self.confirmQwen3Segment(text)
+                    await self.confirmQwen3Segment(text, offset: offsetSnapshot)
                 }
             } catch {
                 DebugFileLogger.log("Qwen3 speculative: failed \(error)")
@@ -240,9 +244,9 @@ actor SenseVoiceWSClient: SpeechRecognizer {
         }
     }
 
-    private func confirmQwen3Segment(_ text: String) {
+    private func confirmQwen3Segment(_ text: String, offset: Int) {
         qwen3ConfirmedSegments.append(text)
-        qwen3ConfirmedOffset = allAudioData.count
+        qwen3ConfirmedOffset = offset
         qwen3LatestText = nil
         qwen3HasPendingAudio = false
         DebugFileLogger.log("Qwen3 speculative: confirmed segment \(qwen3ConfirmedSegments.count): \(text.count) chars")
